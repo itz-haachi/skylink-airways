@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkyLink Airways – Find a booking</title>
+  <link rel="stylesheet" href="theme.css">
+  <style>
+    .cards { display: grid; gap: 20px; max-width: 480px; }
+    .cards .btn-block { margin-top: 20px; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 9px 0; border-bottom: 1px solid var(--panel-line); }
+    td:first-child { color: var(--muted); width: 38%; }
+    tr:last-child td { border-bottom: none; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>Find a booking</h1>
+    <p class="lede">Look up any booking with its PNR and the email it was booked with. Signed in? All your trips are in <a href="my-bookings.html">My bookings</a>.</p>
+
+    <div class="cards">
+      <section class="panel">
+        <form id="findForm">
+          <label for="pnr">PNR (booking reference)</label>
+          <input id="pnr" maxlength="6" placeholder="For example K7M2QX" required>
+          <label for="email">Email used when booking</label>
+          <input id="email" type="email" required>
+          <button type="submit" class="btn btn-primary btn-block" id="findBtn">Find booking</button>
+        </form>
+        <div id="findMessage" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="panel" id="bookingCard" hidden>
+        <table id="details"></table>
+        <button class="btn btn-danger btn-block" id="cancelBtn">Cancel this booking</button>
+        <div id="cancelMessage" role="status" aria-live="polite"></div>
+      </section>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="app.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+
+    async function findBooking() {
+      const pnr   = $('pnr').value.trim();
+      const email = $('email').value.trim();
+
+      const { data, error } = await db.rpc('get_booking', { p_pnr: pnr, p_email: email });
+
+      if (error) {
+        $('findMessage').innerHTML = `<div class="message err">${esc(error.message)}</div>`;
+        $('bookingCard').hidden = true;
+        return;
+      }
+      if (data.length === 0) {
+        $('findMessage').innerHTML = `<div class="message err">No booking matches that PNR and email. Check both and try again.</div>`;
+        $('bookingCard').hidden = true;
+        return;
+      }
+
+      $('findMessage').innerHTML = '';
+      showBooking(data[0]);
+    }
+
+    function showBooking(b) {
+      $('details').innerHTML = `
+        <tr><td>PNR</td><td><b>${esc(b.pnr)}</b></td></tr>
+        <tr><td>Passenger</td><td>${esc(b.passenger_name)}</td></tr>
+        <tr><td>Flight</td><td>${esc(b.flight_number)}: ${esc(b.from_city)} to ${esc(b.to_city)}</td></tr>
+        <tr><td>Departs</td><td>${fmt(b.departure_time)}</td></tr>
+        <tr><td>Seat</td><td>${esc(b.seat_number)}, ${esc(b.seat_class.toLowerCase())}</td></tr>
+        <tr><td>Price</td><td>${rupees(b.price)}</td></tr>
+        <tr><td>Status</td><td><span class="status ${b.status}">${b.status === 'CONFIRMED' ? 'Confirmed' : 'Cancelled'}</span>
+            ${b.cancelled_at ? ' on ' + fmt(b.cancelled_at) : ''}</td></tr>`;
+
+      $('cancelBtn').hidden = b.status !== 'CONFIRMED';
+      $('bookingCard').hidden = false;
+    }
+
+    async function cancelBooking() {
+      if (!confirm("Cancel this booking? This can't be undone.")) return;
+
+      const btn = $('cancelBtn');
+      btn.disabled = true;
+
+      const { data, error } = await db.rpc('cancel_booking', {
+        p_pnr:   $('pnr').value.trim(),
+        p_email: $('email').value.trim()
+      });
+
+      btn.disabled = false;
+      $('cancelMessage').innerHTML = error
+        ? `<div class="message err">${esc(error.message)}</div>`
+        : `<div class="message ok">${esc(data)}</div>`;
+      if (!error) findBooking();
+    }
+
+    $('findForm').addEventListener('submit', (event) => {
+      event.preventDefault();
+      $('cancelMessage').innerHTML = '';
+      findBooking();
+    });
+    $('cancelBtn').addEventListener('click', cancelBooking);
+
+    (async () => {
+      const user = await renderHeader('manage.html');
+      if (user) $('email').value = user.email;
+    })();
+  </script>
+</body>
+</html>

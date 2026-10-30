@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkyLink Airways – My bookings</title>
+  <link rel="stylesheet" href="theme.css">
+  <style>
+    .group-title { font-family: var(--display); font-weight: 600; font-size: 22px; color: var(--silver); margin: 36px 0 14px; }
+    .group-title:first-of-type { margin-top: 0; }
+    .trips { display: grid; gap: 16px; }
+
+    .pass {
+      display: grid;
+      grid-template-columns: 1fr 200px;
+      padding: 0;
+      overflow: hidden;
+    }
+    .pass-main { padding: 22px 26px; }
+    .pass-stub {
+      padding: 22px 22px;
+      border-left: 2px dashed var(--panel-line);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .route { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+    .code { font-family: var(--display); font-weight: 700; font-size: 44px; line-height: 1; }
+    .arrow { color: var(--turq); font-size: 26px; }
+    .cities { color: var(--silver); margin: 4px 0 18px; }
+    .facts { display: flex; flex-wrap: wrap; gap: 10px 32px; }
+    .fact span { display: block; font-size: 13px; color: var(--muted); }
+    .fact b { font-weight: 600; }
+    .pnr-label { font-size: 13px; color: var(--muted); }
+    .pnr { font-family: var(--display); font-weight: 700; font-size: 28px; letter-spacing: 3px; }
+
+    .past { opacity: .72; }
+    .empty { text-align: center; padding: 48px 24px; }
+    .empty p { color: var(--silver); margin: 0 0 20px; }
+
+    @media (max-width: 720px) {
+      .pass { grid-template-columns: 1fr; }
+      .pass-stub { border-left: none; border-top: 2px dashed var(--panel-line); flex-direction: row; align-items: center; flex-wrap: wrap; }
+      .code { font-size: 36px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>My bookings</h1>
+    <p class="lede" id="lede">Loading your trips…</p>
+    <div id="message" role="status" aria-live="polite"></div>
+    <div id="trips"></div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="app.js"></script>
+  <script>
+    let user = null;
+    const $ = id => document.getElementById(id);
+
+    async function loadTrips() {
+      const { data, error } = await db.rpc('my_bookings');
+
+      if (error) {
+        $('lede').textContent = '';
+        $('trips').innerHTML = `<div class="panel message err">Couldn't load your bookings: ${esc(error.message)}</div>`;
+        return;
+      }
+
+      $('lede').textContent = `Every seat booked while signed in as ${user.email}.`;
+
+      if (data.length === 0) {
+        $('trips').innerHTML = `
+          <div class="panel empty">
+            <h2>No trips yet</h2>
+            <p>Pick a flight and choose a seat. Your booking will appear here.</p>
+            <a class="btn btn-primary" href="index.html">See flights</a>
+          </div>`;
+        return;
+      }
+
+      const now = new Date();
+      const upcoming = data.filter(b => b.status === 'CONFIRMED' && new Date(b.departure_time) > now)
+                           .sort((a, b) => new Date(a.departure_time) - new Date(b.departure_time));
+      const past = data.filter(b => !upcoming.includes(b));
+
+      let html = '';
+      if (upcoming.length) html += `<h2 class="group-title">Upcoming</h2><div class="trips">${upcoming.map(b => pass(b, true)).join('')}</div>`;
+      if (past.length)     html += `<h2 class="group-title">Past and cancelled</h2><div class="trips">${past.map(b => pass(b, false)).join('')}</div>`;
+      $('trips').innerHTML = html;
+
+      document.querySelectorAll('[data-cancel]').forEach(btn =>
+        btn.addEventListener('click', () => cancelTrip(btn.dataset.cancel, btn)));
+    }
+
+    function pass(b, canCancel) {
+      return `
+        <article class="panel pass ${canCancel ? '' : 'past'}">
+          <div class="pass-main">
+            <div class="route">
+              <span class="code">${esc(b.from_code)}</span><span class="arrow">→</span><span class="code">${esc(b.to_code)}</span>
+              <span class="status ${b.status}">${b.status === 'CONFIRMED' ? 'Confirmed' : 'Cancelled'}</span>
+            </div>
+            <div class="cities">${esc(b.from_city)} to ${esc(b.to_city)}</div>
+            <div class="facts">
+              <div class="fact"><span>Flight</span><b>${esc(b.flight_number)}</b></div>
+              <div class="fact"><span>Departs</span><b>${fmt(b.departure_time)}</b></div>
+              <div class="fact"><span>Seat</span><b>${esc(b.seat_number)}, ${esc(b.seat_class.toLowerCase())}</b></div>
+              <div class="fact"><span>Price</span><b>${rupees(b.price)}</b></div>
+            </div>
+          </div>
+          <div class="pass-stub">
+            <div><div class="pnr-label">PNR</div><div class="pnr">${esc(b.pnr)}</div></div>
+            ${canCancel ? `<button class="btn btn-danger btn-small" data-cancel="${esc(b.pnr)}">Cancel booking</button>` : ''}
+          </div>
+        </article>`;
+    }
+
+    async function cancelTrip(pnr, btn) {
+      if (!confirm(`Cancel booking ${pnr}? This can't be undone.`)) return;
+      btn.disabled = true;
+
+      const { data, error } = await db.rpc('cancel_booking', { p_pnr: pnr, p_email: user.email });
+
+      $('message').innerHTML = error
+        ? `<div class="message err">${esc(error.message)}</div>`
+        : `<div class="message ok">${esc(data)}</div>`;
+      loadTrips();
+    }
+
+    (async () => {
+      user = await requireLogin();
+      if (!user) return;
+      await renderHeader('my-bookings.html');
+      loadTrips();
+    })();
+  </script>
+</body>
+</html>

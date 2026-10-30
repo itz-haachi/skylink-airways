@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkyLink Airways – Admin</title>
+  <link rel="stylesheet" href="theme.css">
+  <style>
+    .page { max-width: 1200px; }
+    .topline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
+    .topline .lede { margin: 0; }
+    .live { padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600;
+            background: rgba(195, 204, 217, .14); color: var(--silver); }
+    .live.on { background: var(--ok-bg); color: var(--ok); }
+
+    .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
+    .kpi .value { font-family: var(--display); font-weight: 700; font-size: 40px; line-height: 1.1; }
+    .kpi .label { color: var(--silver); font-size: 15px; }
+    .kpi .sub   { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+    .card h2 { font-size: 24px; margin-bottom: 2px; }
+    .sql { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+
+    .bars { display: grid; gap: 6px; position: relative; }
+    .bars + table { margin-top: 22px; }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 130px 1fr 92px;
+      align-items: center;
+      gap: 12px;
+      font-size: 14px;
+      padding: 3px 0;
+      border-radius: 6px;
+    }
+    .bar-row:hover { background: rgba(195, 204, 217, .07); }
+    .bar-row .name { color: var(--silver-hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bar-row .name small { color: var(--muted); }
+    .bar-row .num { text-align: right; color: var(--silver-hi); font-variant-numeric: tabular-nums; }
+    .track { height: 14px; position: relative; }
+    .fill { height: 100%; background: var(--turq); border-radius: 0 4px 4px 0; min-width: 2px; }
+    .bar-row.above .name { font-weight: 600; }
+    .avg-line { position: absolute; top: -4px; bottom: -4px; border-left: 2px dashed var(--gold); pointer-events: none; }
+    .avg-note { color: var(--silver); font-size: 13px; margin-top: 14px; }
+    .avg-note b { color: var(--gold); }
+
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; font-weight: 500; color: var(--muted); padding: 0 8px 8px 0; border-bottom: 1px solid var(--panel-line); }
+    td { padding: 8px 8px 8px 0; border-bottom: 1px solid rgba(195, 204, 217, .1); }
+    tr:last-child td { border-bottom: none; }
+    td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip { border: 1px solid var(--panel-line); border-radius: 999px; padding: 4px 12px; font-size: 14px; }
+    .chip small { color: var(--muted); }
+
+    .denied { max-width: 520px; }
+
+    @media (max-width: 900px) {
+      .kpis { grid-template-columns: 1fr 1fr; }
+      .grid { grid-template-columns: 1fr; }
+      .bar-row { grid-template-columns: 96px 1fr 80px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>Admin dashboard</h1>
+    <div class="topline">
+      <p class="lede">Live figures from the database. They update by themselves when someone books or cancels.</p>
+      <span class="live" id="live">Connecting…</span>
+    </div>
+    <div id="dashboard"><div class="panel">Loading reports…</div></div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="app.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const pct = n => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 1 }) + '%';
+
+    async function loadDashboard() {
+      const { data, error } = await db.rpc('admin_dashboard');
+
+      if (error) {
+        $('dashboard').innerHTML = error.code === '42501'
+          ? `<div class="panel denied"><h2>Admins only</h2>
+               <p>This page is for SkyLink staff. Your account doesn't have admin access.</p>
+               <a class="btn btn-ghost btn-small" href="index.html">Back to flights</a></div>`
+          : `<div class="panel message err">Couldn't load the reports: ${esc(error.message)}</div>`;
+        return false;
+      }
+
+      render(data);
+      return true;
+    }
+
+    function render(d) {
+      const s = d.summary;
+      const cancelPct = s.bookings ? 100 * s.cancelled / s.bookings : 0;
+
+      $('dashboard').innerHTML = `
+        <section class="kpis">
+          ${kpi(s.tickets.toLocaleString('en-IN'), 'Tickets sold', 'Confirmed bookings')}
+          ${kpi(rupees(s.revenue), 'Revenue', 'From confirmed bookings')}
+          ${kpi(pct(s.avg_load), 'Seats filled', 'Average across all flights')}
+          ${kpi(s.cancelled.toLocaleString('en-IN'), 'Cancelled', pct(cancelPct) + ' of all bookings')}
+        </section>
+
+        <section class="grid">
+          <div class="panel card">
+            <h2>How full each flight is</h2>
+            <p class="sql">Reports 2 and 3: the flight_availability view, and a subquery for the average</p>
+            ${loadChart(d.load, s.avg_load)}
+          </div>
+          <div class="panel card">
+            <h2>Revenue by route</h2>
+            <p class="sql">Report 1: JOIN, GROUP BY, SUM</p>
+            ${barChart(d.routes, r => esc(r.route), r => Number(r.revenue), r => rupeesShort(r.revenue),
+                       r => `${r.route}: ${rupees(r.revenue)} from ${r.tickets_sold} tickets`)}
+          </div>
+        </section>
+
+        <section class="grid">
+          <div class="panel card">
+            <h2>Business and economy</h2>
+            <p class="sql">Report 5: a window function, SUM(SUM(price)) OVER ()</p>
+            ${barChart(d.classes, r => esc(cap(r.seat_class)), r => Number(r.pct_of_revenue), r => pct(r.pct_of_revenue),
+                       r => `${cap(r.seat_class)}: ${r.tickets} tickets, ${rupees(r.revenue)}`, 100)}
+            ${table(['Class', 'Tickets', 'Revenue'], d.classes,
+                    r => [cap(r.seat_class), r.tickets, rupees(r.revenue)])}
+          </div>
+          <div class="panel card">
+            <h2>Revenue by departure city</h2>
+            <p class="sql">Report 4: LEFT JOIN, so cities with no sales still appear</p>
+            ${table(['City', 'Tickets', 'Revenue'], d.cities,
+                    r => [`${r.city} (${r.iata_code})`, r.tickets_sold, rupees(r.revenue)])}
+          </div>
+        </section>
+
+        <section class="grid">
+          <div class="panel card">
+            <h2>Cancellations by flight</h2>
+            <p class="sql">Report 6: COUNT(*) FILTER and HAVING</p>
+            ${table(['Flight', 'Bookings', 'Cancelled', 'Rate'], d.cancellations,
+                    r => [r.flight_number, r.total_bookings, r.cancelled, pct(r.cancel_rate_pct)])}
+          </div>
+          <div class="panel card">
+            <h2>Top repeat passengers</h2>
+            <p class="sql">Report 7: GROUP BY with HAVING COUNT(*) > 1</p>
+            ${table(['Passenger', 'Bookings', 'Spent'], d.repeat,
+                    r => [r.passenger, r.bookings, rupees(r.total_spent)])}
+          </div>
+        </section>
+
+        <section class="panel card">
+          <h2>Aircraft with no flights</h2>
+          <p class="sql">Report 8: NOT EXISTS</p>
+          ${d.idle.length
+            ? `<div class="chips">${d.idle.map(a =>
+                `<span class="chip">${esc(a.registration)} <small>${esc(a.model_name)}, ${esc(a.based_at)}</small></span>`).join('')}</div>`
+            : '<p>Every aircraft is flying at least one route.</p>'}
+        </section>`;
+    }
+
+    const cap = t => t.charAt(0) + t.slice(1).toLowerCase();
+    const rupeesShort = n => '₹' + (n >= 100000 ? (n / 100000).toFixed(1) + ' L' : Number(n).toLocaleString('en-IN'));
+
+    function kpi(value, label, sub) {
+      return `<div class="panel kpi"><div class="label">${label}</div>
+                <div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+    }
+
+    function barChart(rows, name, value, shown, tip, max) {
+      if (!rows.length) return '<p>No data yet.</p>';
+      max = max || Math.max(...rows.map(value)) || 1;
+      return `<div class="bars">${rows.map(r => `
+        <div class="bar-row" title="${esc(tip(r))}">
+          <span class="name">${name(r)}</span>
+          <span class="track"><span class="fill" style="width:${100 * value(r) / max}%;display:block"></span></span>
+          <span class="num">${shown(r)}</span>
+        </div>`).join('')}</div>`;
+    }
+
+    function loadChart(rows, avg) {
+      const bars = rows.map(r => `
+        <div class="bar-row ${r.load_factor_pct > avg ? 'above' : ''}"
+             title="${esc(`${r.flight_number} ${r.from_code}→${r.to_code}: ${r.seats_booked} of ${r.total_seats} seats`)}">
+          <span class="name">${esc(r.flight_number)} <small>${esc(r.from_code)}→${esc(r.to_code)}</small></span>
+          <span class="track"><span class="fill" style="width:${r.load_factor_pct}%;display:block"></span>
+            <span class="avg-line" style="left:${avg}%"></span></span>
+          <span class="num">${pct(r.load_factor_pct)}</span>
+        </div>`).join('');
+      const above = rows.filter(r => r.load_factor_pct > avg).length;
+      return `<div class="bars">${bars}</div>
+        <p class="avg-note">The <b>gold line</b> is the average, ${pct(avg)}. ${above} flights are above it (shown in bold).</p>`;
+    }
+
+    function table(headers, rows, cells) {
+      if (!rows.length) return '<p>Nothing to show yet.</p>';
+      const isNum = i => i > 0;
+      return `<table>
+        <thead><tr>${headers.map((h, i) => `<th class="${isNum(i) ? 'n' : ''}">${h}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(r => `<tr>${cells(r).map((c, i) =>
+          `<td class="${isNum(i) ? 'n' : ''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>`;
+    }
+
+    function listenForChanges() {
+      let timer;
+      db.channel('admin-dashboard')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'booking' }, () => {
+          clearTimeout(timer);
+          timer = setTimeout(loadDashboard, 500);
+        })
+        .subscribe(status => {
+          $('live').textContent = status === 'SUBSCRIBED' ? 'Live' : 'Not live: refresh to update';
+          $('live').className = status === 'SUBSCRIBED' ? 'live on' : 'live';
+        });
+    }
+
+    (async () => {
+      const user = await requireLogin();
+      if (!user) return;
+      await renderHeader('admin.html');
+      if (await loadDashboard()) listenForChanges();
+      else $('live').hidden = true;
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkyLink Airways – Flights</title>
+  <link rel="stylesheet" href="theme.css">
+  <style>
+    .flights { display: grid; gap: 12px; }
+    .flight {
+      display: grid;
+      grid-template-columns: 90px 1.6fr 1fr 110px 150px 140px;
+      align-items: center;
+      gap: 20px;
+      padding: 18px 22px;
+    }
+    .flight-no {
+      font-family: var(--display);
+      font-weight: 700;
+      font-size: 22px;
+      color: var(--turq);
+    }
+    .route { display: flex; align-items: center; gap: 14px; }
+    .route .code {
+      font-family: var(--display);
+      font-weight: 700;
+      font-size: 30px;
+      line-height: 1;
+    }
+    .route .city { color: var(--silver); font-size: 14px; }
+    .route .line { flex: 1; height: 1px; min-width: 24px; background: var(--panel-line); position: relative; }
+    .route .line svg { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px;
+                       transform: translate(-50%, -50%); fill: var(--silver); }
+    .times { color: var(--silver); font-size: 15px; }
+    .times b { color: var(--silver-hi); font-weight: 600; }
+    .fare { font-family: var(--display); font-weight: 600; font-size: 22px; }
+    .fare small { display: block; font-family: var(--font); font-size: 13px; color: var(--muted); font-weight: 400; }
+
+    .seats-left { font-size: 14px; color: var(--silver); }
+    .bar { height: 4px; border-radius: 4px; background: rgba(195, 204, 217, .18); margin-top: 6px; overflow: hidden; }
+    .bar span { display: block; height: 100%; background: var(--turq); }
+    .seats-left.low { color: #FFD27F; }
+    .seats-left.low .bar span { background: #FFD27F; }
+
+    .empty { text-align: center; color: var(--silver); padding: 40px; }
+
+    @media (max-width: 900px) {
+      .flight { grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+      .route { grid-column: 1 / -1; order: -1; }
+      .flight .btn { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>Where to next?</h1>
+    <p class="lede">Every SkyLink flight that's still open for booking. Choose one to pick your seat.</p>
+
+    <div class="flights" id="flights">
+      <div class="panel empty">Loading flights…</div>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="app.js"></script>
+  <script>
+    const planeIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z" transform="rotate(90 12 12)"/></svg>';
+
+    async function loadFlights() {
+      const { data, error } = await db
+        .from('flight_availability')
+        .select('*')
+        .order('departure_time');
+
+      const list = document.getElementById('flights');
+
+      if (error) {
+        list.innerHTML = `<div class="panel message err">Couldn't load flights: ${esc(error.message)}</div>`;
+        return;
+      }
+      if (data.length === 0) {
+        list.innerHTML = `<div class="panel empty">No flights are scheduled right now.</div>`;
+        return;
+      }
+
+      list.innerHTML = data.map(f => {
+        const pctFree = Math.round(100 * f.seats_available / f.total_seats);
+        const low = f.seats_available <= 10 ? 'low' : '';
+        return `
+          <article class="panel flight">
+            <div class="flight-no">${esc(f.flight_number)}</div>
+            <div class="route">
+              <div><div class="code">${esc(f.from_code)}</div><div class="city">${esc(f.from_city)}</div></div>
+              <div class="line">${planeIcon}</div>
+              <div><div class="code">${esc(f.to_code)}</div><div class="city">${esc(f.to_city)}</div></div>
+            </div>
+            <div class="times">Departs <b>${fmt(f.departure_time)}</b><br>Arrives ${fmt(f.arrival_time)}</div>
+            <div class="fare">${rupees(f.base_fare)}<small>economy from</small></div>
+            <div class="seats-left ${low}">
+              ${f.seats_available} of ${f.total_seats} seats left
+              <div class="bar"><span style="width:${pctFree}%"></span></div>
+            </div>
+            <a class="btn btn-primary btn-small" href="seat.html?flight=${f.flight_id}">Choose seat</a>
+          </article>`;
+      }).join('');
+    }
+
+    renderHeader('index.html');
+    loadFlights();
+  </script>
+</body>
+</html>
